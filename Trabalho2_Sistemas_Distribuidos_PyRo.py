@@ -27,6 +27,24 @@ class Peer(object):
         agora = time.time()
         ultima_vez_heartbeat[name] = agora
 
+    #@Pyro5.api.expose  
+    #Já está definido na classe
+    def request_SC(self):
+        global state
+        if state == State.RELEASED:
+            state = State.WANTED
+            print(f"{nome_processo} está requisitando o recurso.")
+            time.sleep(2)  # Simula o tempo de requisição
+            state = State.HELD
+            print(f"{nome_processo} agora está com o recurso.")
+            time.sleep(TIME_HELD_SC)  # Simula o tempo que o recurso é mantido
+            state = State.RELEASED
+            print(f"{nome_processo} liberou o recurso.")
+        else:
+            print(f"{nome_processo} não pode requisitar o recurso agora. Estado atual: {state.name}")
+
+
+
 
 def start_nameserver():
     ns_uri, ns_daemon, _ = Pyro5.nameserver.start_ns(host="localhost", port=9090)
@@ -102,28 +120,35 @@ def monitorar_peers():
                         LIST_PEERS.remove(peer)
         time.sleep(0.5)
 
-
 def iniciar_monitorar_peers():
     t_monitor = threading.Thread(target=monitorar_peers, daemon=True)
     t_monitor.start()
 
 
 if __name__ == "__main__":
+    # Configuração do argparse para receber o nome do processo
     parser = argparse.ArgumentParser()
     parser.add_argument("--nome", required=True, help="Nome do processo (peer)")
     args = parser.parse_args()
     nome_processo = args.nome
+
     iniciar_thread_processo(nome_processo)
     time.sleep(10)
 
     iniciar_heartbeats()
     iniciar_monitorar_peers()
 
+
     while True:
         print("1 - Requisitar recursos")
         print("2 - Liberar recursos")
         print("3 - Listar peers ativos")
         opcao = input("Selecione uma das opções: ")
+
+        if opcao == '1':
+            object_name = "PYRONAME:" + nome_processo 
+            proxy = Pyro5.api.Proxy(object_name) 
+            proxy.request_SC()
 
         if opcao == '3':
             ns = Pyro5.api.locate_ns()
