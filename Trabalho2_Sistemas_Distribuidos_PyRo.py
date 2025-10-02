@@ -4,7 +4,11 @@ import time
 import argparse
 from enum import Enum
 
-
+# SER UNICAST
+        # (1) Segurança: no máximo um processo por vez pode ser executado na SC;
+        # (2) Subsistência: os pedidos para entrar e sair de uma seção crítica precisam ser bem-sucedidos; 
+        # (3) Ordenação: ordenar as mensagens que solicitarem a entrada na SC.
+        
 class State(Enum):
     RELEASED = 1
     HELD = 2
@@ -12,13 +16,15 @@ class State(Enum):
 
 
 nome_processo = ''
+#On initialization state := RELEASED;
 state = State.RELEASED
 HEART_BEAT_TIME = 10
 TIME_HELD_SC = 20
 LIST_PEERS = ['peerA', 'peerB']
 ultima_vez_heartbeat = {}
 peers_lock = threading.Lock()
-
+fila_request = []
+count_replies = 0
 
 @Pyro5.api.expose
 class Peer(object):
@@ -27,23 +33,32 @@ class Peer(object):
         agora = time.time()
         ultima_vez_heartbeat[name] = agora
 
-    #@Pyro5.api.expose  
-    #Já está definido na classe
-    def request_SC(self):
-        global state
-        if state == State.RELEASED:
-            state = State.WANTED
-            print(f"{nome_processo} está requisitando o recurso.")
-            time.sleep(2)  # Simula o tempo de requisição
-            state = State.HELD
-            print(f"{nome_processo} agora está com o recurso.")
-            time.sleep(TIME_HELD_SC)  # Simula o tempo que o recurso é mantido
-            state = State.RELEASED
-            print(f"{nome_processo} liberou o recurso.")
+    
+    @Pyro5.api.oneway
+    def request_entry(self, timestamp, nome):
+        # Se o status de todos os outros forem Release - TODOS os outros processos respondem imediatamente e o processo entra na SC
+        # Se o status de algum outro for Held - então esse processo não responderá aos pedidos até que tenha terminado com a SC
+        global state, fila_request
+        # Adicionar a validacao por ID = Se apresentarem indicações de tempo iguais, serão ordenados de acordo com os identificadores correspondente dos processos.
+        # Ver se ele vai ordenar peerA e peerB corretamente 
+        if state == State.HELD:
+            print(f"O {nome_processo} está em estado HELD e não pode responder a {nome} - Adicionado na Fila.")
+            fila_request.append((timestamp, nome))
+        elif state == State.RELEASED:
+            proxy = Pyro5.api.Proxy("PYRONAME:" + nome) 
+            proxy.reply_granted()
+            print(f"{nome_processo} está em estado RELEASED e responde a {nome}.")
         else:
-            print(f"{nome_processo} não pode requisitar o recurso agora. Estado atual: {state.name}")
+            print('erro no estado?')
+            # Responder ao pedido
 
-
+    @Pyro5.api.oneway
+    def reply_granted(self):
+        global count_replies
+        count_replies += 1
+        print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies}")
+        if count_replies == len(LIST_PEERS) - 1:
+            self.enter_SC()
 
 
 def start_nameserver():
