@@ -35,31 +35,91 @@ class Peer(object):
 
     
     @Pyro5.api.oneway
-    def request_entry(self, timestamp, nome):
+    def request_entry(self,timestamp, nome):
+        print(f'Recebeu o pedido de entrada do [{nome}]')
         # Se o status de todos os outros forem Release - TODOS os outros processos respondem imediatamente e o processo entra na SC
         # Se o status de algum outro for Held - então esse processo não responderá aos pedidos até que tenha terminado com a SC
         global state, fila_request
         # Adicionar a validacao por ID = Se apresentarem indicações de tempo iguais, serão ordenados de acordo com os identificadores correspondente dos processos.
         # Ver se ele vai ordenar peerA e peerB corretamente 
+
+        # Cada peer verifica se está segurando
         if state == State.HELD:
-            print(f"O {nome_processo} está em estado HELD e não pode responder a {nome} - Adicionado na Fila.")
+            print(f"O {nome_processo} está em estado HELD e não pode responder a {nome} > Adicionado na Fila.")
             fila_request.append((timestamp, nome))
         elif state == State.RELEASED:
             proxy = Pyro5.api.Proxy("PYRONAME:" + nome) 
-            proxy.reply_granted()
             print(f"{nome_processo} está em estado RELEASED e responde a {nome}.")
+            proxy.reply_granted()
         else:
             print('erro no estado?')
             # Responder ao pedido
 
     @Pyro5.api.oneway
     def reply_granted(self):
+        print(f'Teste')
         global count_replies
         count_replies += 1
         print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies}")
         if count_replies == len(LIST_PEERS) - 1:
             self.enter_SC()
+            #Tem que ter timer na SC
 
+    def request_SC(self):
+        global state, count_replies, fila_request
+        state = State.WANTED
+        count_replies = 0
+        timestamp = time.time()
+        print(f"{nome_processo} está em estado WANTED e solicita permissão para entrar na SC. ts={timestamp}")
+
+        # Unicast
+        for peer in LIST_PEERS:
+            if peer != nome_processo:
+                try:
+                    # Pede para todos para entrar na SC
+                    proxy = Pyro5.api.Proxy("PYRONAME:" + peer) 
+                    proxy.request_entry(timestamp, nome_processo)
+                except Exception as e:
+                    print(f"Falha ao enviar request_entry para {peer}: {e}")
+
+        # Esperar até receber permissão de todos os Ppers
+        # while count_replies < len(LIST_PEERS) - 1:
+        #     time.sleep(0.1)
+
+        #temporizador
+        # se passar do tempo de espera ele inativa o peer
+        tempo_espera = time.time() + TIME_HELD_SC
+        while True:
+            if count_replies == len(LIST_PEERS) - 1:
+                #Replies not working yet :))))))))))))))))))))))))))))))) FUCK aushashua
+                break
+            if time.time() > tempo_espera:
+                print(f"EXCEDEU - verificar os peers ativos e quem não respondeu - desativar ele")
+                break
+        
+        state = State.HELD
+        self.enter_SC()
+
+    def enter_SC(self):
+            global state
+            print(f"{nome_processo} entrou na seção crítica.")
+            time.sleep(TIME_HELD_SC)  # Simula o tempo dentro da SC
+            print(f"{nome_processo} está saindo da seção crítica.")
+            state = State.RELEASED
+            self.exit_SC()
+
+    def exit_SC(self):
+        global state, fila_request
+        state = State.RELEASED
+        print(f"{nome_processo} saiu da SC")
+        # Processa fila
+        for ts, requester in fila_request:
+            try:
+                proxy = Pyro5.api.Proxy("PYRONAME:" + requester)
+                proxy.reply_granted(nome_processo)
+            except:
+                print(f"Não foi possível enviar permissão para {requester}")
+        fila_request.clear()
 
 def start_nameserver():
     ns_uri, ns_daemon, _ = Pyro5.nameserver.start_ns(host="localhost", port=9090)
@@ -150,8 +210,8 @@ if __name__ == "__main__":
     iniciar_thread_processo(nome_processo)
     time.sleep(10)
 
-    iniciar_heartbeats()
-    iniciar_monitorar_peers()
+    #iniciar_heartbeats()
+    #iniciar_monitorar_peers()
 
 
     while True:
@@ -163,6 +223,7 @@ if __name__ == "__main__":
         if opcao == '1':
             object_name = "PYRONAME:" + nome_processo 
             proxy = Pyro5.api.Proxy(object_name) 
+            timeS = time.time()
             proxy.request_SC()
 
         if opcao == '3':
