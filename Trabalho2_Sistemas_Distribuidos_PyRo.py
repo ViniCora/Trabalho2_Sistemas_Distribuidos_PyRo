@@ -20,7 +20,7 @@ nome_processo = ''
 state = State.RELEASED
 HEART_BEAT_TIME = 10
 TIME_HELD_SC = 20
-LIST_PEERS = ['peerA', 'peerB']
+LIST_PEERS = ['peerA', 'peerB', 'peerC']
 ultima_vez_heartbeat = {}
 peers_lock = threading.Lock()
 fila_request = []
@@ -33,15 +33,10 @@ class Peer(object):
         agora = time.time()
         ultima_vez_heartbeat[name] = agora
 
-    
     @Pyro5.api.oneway
     def request_entry(self,timestamp, nome):
         print(f'Recebeu o pedido de entrada do [{nome}]')
-        # Se o status de todos os outros forem Release - TODOS os outros processos respondem imediatamente e o processo entra na SC
-        # Se o status de algum outro for Held - então esse processo não responderá aos pedidos até que tenha terminado com a SC
         global state, fila_request
-        # Adicionar a validacao por ID = Se apresentarem indicações de tempo iguais, serão ordenados de acordo com os identificadores correspondente dos processos.
-        # Ver se ele vai ordenar peerA e peerB corretamente 
 
         # Cada peer verifica se está segurando
         if state == State.HELD:
@@ -52,12 +47,11 @@ class Peer(object):
             print(f"{nome_processo} está em estado RELEASED e responde a {nome}.")
             proxy.reply_granted()
         else:
-            print('erro no estado?')
+            print('Ajustar')
             # Responder ao pedido
 
     @Pyro5.api.oneway
     def reply_granted(self):
-        print(f'Teste')
         global count_replies
         count_replies += 1
         print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies} de {len(LIST_PEERS) - 1}")
@@ -69,7 +63,6 @@ class Peer(object):
         timestamp = time.time()
         print(f"{nome_processo} está em estado WANTED e solicita permissão para entrar na SC. ts={timestamp}")
 
-        # Unicast
         for peer in LIST_PEERS:
             if peer != nome_processo:
                 try:
@@ -84,11 +77,12 @@ class Peer(object):
         #     time.sleep(0.1)
 
         #temporizador
-        # se passar do tempo de espera ele inativa o peer
+        # se passar do tempo de espera ele inativa o peer - Heartbeat?
         tempo_espera = time.time() + TIME_HELD_SC
         while True:
             if count_replies == len(LIST_PEERS) - 1:
-                #Replies not working yet :))))))))))))))))))))))))))))))) FUCK aushashua
+                #ADJUSTE - se um peer falhar ele não entra em deadlock
+                print(f"{nome_processo} recebeu permissão de todos os peers.")
                 break
             if time.time() > tempo_espera:
                 print(f"EXCEDEU - verificar os peers ativos e quem não respondeu - desativar ele")
