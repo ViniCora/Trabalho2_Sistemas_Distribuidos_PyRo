@@ -60,10 +60,7 @@ class Peer(object):
         print(f'Teste')
         global count_replies
         count_replies += 1
-        print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies}")
-        if count_replies == len(LIST_PEERS) - 1:
-            self.enter_SC()
-            #Tem que ter timer na SC
+        print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies} de {len(LIST_PEERS) - 1}")
 
     def request_SC(self):
         global state, count_replies, fila_request
