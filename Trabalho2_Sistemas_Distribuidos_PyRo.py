@@ -46,9 +46,9 @@ class Peer(object):
             proxy = Pyro5.api.Proxy("PYRONAME:" + nome) 
             print(f"{nome_processo} está em estado RELEASED e responde a {nome}.")
             proxy.reply_granted()
-        else:
+        elif state == State.WANTED:
             print('Ajustar')
-            # Responder ao pedido
+            # Responder ao pedidoz
 
     @Pyro5.api.oneway
     def reply_granted(self):
@@ -60,6 +60,7 @@ class Peer(object):
         global state, count_replies, fila_request
         state = State.WANTED
         count_replies = 0
+        #segudos desde 1 de janeiro de 1970
         timestamp = time.time()
         print(f"{nome_processo} está em estado WANTED e solicita permissão para entrar na SC. ts={timestamp}")
 
@@ -93,11 +94,13 @@ class Peer(object):
 
     def enter_SC(self):
             global state
-            print(f"{nome_processo} entrou na seção crítica.")
-            time.sleep(TIME_HELD_SC)  # Simula o tempo dentro da SC
-            print(f"{nome_processo} está saindo da seção crítica.")
-            state = State.RELEASED
-            self.exit_SC()
+            if(state != State.HELD and count_replies == len(LIST_PEERS) - 1):
+                state = State.HELD
+                print(f"{nome_processo} entrou na seção crítica.")
+                time.sleep(TIME_HELD_SC)  # Tempo dentro da SC
+                print(f"{nome_processo} está saindo da seção crítica.")
+                state = State.RELEASED
+                self.exit_SC()
 
     def exit_SC(self):
         global state, fila_request
@@ -211,11 +214,21 @@ if __name__ == "__main__":
         print("3 - Listar peers ativos")
         opcao = input("Selecione uma das opções: ")
 
+        proxy = Pyro5.api.Proxy("PYRONAME:" + nome_processo)
+
         if opcao == '1':
-            object_name = "PYRONAME:" + nome_processo 
-            proxy = Pyro5.api.Proxy(object_name) 
             timeS = time.time()
             proxy.request_SC()
+
+        elif opcao == '2':
+            if state != State.HELD:
+                print(f"{nome_processo} Liberando recursos manualmente")
+                proxy.exit_SC()    
+            else:
+                print(f"{nome_processo} Não está na seção crítica.")
+
+            print(f"{nome_processo} está saindo da seção crítica.")
+            #organizar para pegar o próximo da fila
 
         if opcao == '3':
             ns = Pyro5.api.locate_ns()
