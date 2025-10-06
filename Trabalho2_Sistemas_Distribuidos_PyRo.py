@@ -48,8 +48,11 @@ class Peer(object):
             print(f"{nome_processo} está em estado RELEASED e responde a {nome}.")
             proxy.reply_granted()
         elif state == State.WANTED:
-            print('Ajustar')
-            # Responder ao pedidoz
+            print('Pending')
+            # Comparar timestamps
+            # Se o outro for mais antigo permite
+            # Se o o outro for mais recente coloca na fila
+
 
     @Pyro5.api.oneway
     def reply_granted(self):
@@ -78,12 +81,14 @@ class Peer(object):
         while True:
             if count_replies == len(LIST_PEERS) - 1:
                 print(f"{nome_processo} recebeu permissão de todos os peers.")
+                self.enter_SC()
                 break
             if time.time() > max_tempo_espera:
+                #fazer a desativacao
                 print(f"EXCEDEU - verificar os peers ativos e quem não respondeu - desativar ele")
                 break
             time.sleep(0.1) 
-        self.enter_SC()
+        
 
     def enter_SC(self):
             global state
@@ -94,6 +99,7 @@ class Peer(object):
                 # Não pode ser time sleep se não eu n vou conseguir liberar a SC manualmente
                 #time.sleep(TIME_HELD_SC)  # Tempo dentro da SC
                 
+                #Colocar uns locks
                 inicio_held = time.time()
                 while(State.HELD == state):            
                     if(time.time() > inicio_held + TIME_HELD_SC):
@@ -118,6 +124,7 @@ class Peer(object):
                 proxy.reply_granted(nome_processo)
             except:
                 print(f"Não foi possível enviar permissão para {requester}")
+        #Ajustar isso para não esvaziar a fila mas ir para o próximo
         fila_request.clear()
 
 
@@ -139,7 +146,7 @@ def localizar_nameserver():
 
 
 def iniciar_processo(processo):
-    global nome_processo;
+    global nome_processo
     daemon = Pyro5.server.Daemon()
     ns = localizar_nameserver()
     nome_processo = processo
@@ -224,7 +231,7 @@ if __name__ == "__main__":
 
         if opcao == '1':
             timeS = time.time()
-            proxy.request_SC()
+            proxy.request_SC(timeS)
 
         elif opcao == '2':
             if state == State.HELD:
