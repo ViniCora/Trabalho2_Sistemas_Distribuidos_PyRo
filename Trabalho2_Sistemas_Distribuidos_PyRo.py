@@ -19,7 +19,8 @@ nome_processo = ''
 #On initialization state := RELEASED;
 state = State.RELEASED
 HEART_BEAT_TIME = 10
-TIME_HELD_SC = 20
+TIME_HELD_SC = 8
+TIME_WAIT_SC = 5
 LIST_PEERS = ['peerA', 'peerB', 'peerC']
 ultima_vez_heartbeat = {}
 peers_lock = threading.Lock()
@@ -57,13 +58,13 @@ class Peer(object):
         print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies} de {len(LIST_PEERS) - 1}")
 
     def request_SC(self):
-        global state, count_replies, fila_request
+        global state, count_replies
         state = State.WANTED
         count_replies = 0
         #segudos desde 1 de janeiro de 1970
         timestamp = time.time()
         print(f"{nome_processo} está em estado WANTED e solicita permissão para entrar na SC. ts={timestamp}")
-
+        
         for peer in LIST_PEERS:
             if peer != nome_processo:
                 try:
@@ -73,23 +74,15 @@ class Peer(object):
                 except Exception as e:
                     print(f"Falha ao enviar request_entry para {peer}: {e}")
 
-        # Esperar até receber permissão de todos os Ppers
-        # while count_replies < len(LIST_PEERS) - 1:
-        #     time.sleep(0.1)
-
-        #temporizador
-        # se passar do tempo de espera ele inativa o peer - Heartbeat?
-        tempo_espera = time.time() + TIME_HELD_SC
+        max_tempo_espera = time.time() + TIME_WAIT_SC
         while True:
             if count_replies == len(LIST_PEERS) - 1:
-                #ADJUSTE - se um peer falhar ele não entra em deadlock
                 print(f"{nome_processo} recebeu permissão de todos os peers.")
                 break
-            if time.time() > tempo_espera:
+            if time.time() > max_tempo_espera:
                 print(f"EXCEDEU - verificar os peers ativos e quem não respondeu - desativar ele")
                 break
-        
-        state = State.HELD
+            time.sleep(0.1) 
         self.enter_SC()
 
     def enter_SC(self):
@@ -97,15 +90,27 @@ class Peer(object):
             if(state != State.HELD and count_replies == len(LIST_PEERS) - 1):
                 state = State.HELD
                 print(f"{nome_processo} entrou na seção crítica.")
-                time.sleep(TIME_HELD_SC)  # Tempo dentro da SC
-                print(f"{nome_processo} está saindo da seção crítica.")
-                state = State.RELEASED
-                self.exit_SC()
+                #########################################################################
+                # Não pode ser time sleep se não eu n vou conseguir liberar a SC manualmente
+                #time.sleep(TIME_HELD_SC)  # Tempo dentro da SC
+                
+                inicio_held = time.time()
+                while(State.HELD == state):            
+                    if(time.time() > inicio_held + TIME_HELD_SC):
+                        print(f"{nome_processo} atingiu o tempo máximo na seção crítica.")
+                        self.exit_SC()
+                        break
+                    time.sleep(0.1)
 
     def exit_SC(self):
         global state, fila_request
         state = State.RELEASED
         print(f"{nome_processo} saiu da SC")
+
+        if not fila_request:
+            print("Nenhum processo aguardando a SC.")
+        else:
+            print(f"Processos aguardando na fila: {[req[1] for req in fila_request]}")              
         # Processa fila
         for ts, requester in fila_request:
             try:
@@ -114,6 +119,7 @@ class Peer(object):
             except:
                 print(f"Não foi possível enviar permissão para {requester}")
         fila_request.clear()
+
 
 def start_nameserver():
     ns_uri, ns_daemon, _ = Pyro5.nameserver.start_ns(host="localhost", port=9090)
@@ -221,13 +227,11 @@ if __name__ == "__main__":
             proxy.request_SC()
 
         elif opcao == '2':
-            if state != State.HELD:
+            if state == State.HELD:
                 print(f"{nome_processo} Liberando recursos manualmente")
                 proxy.exit_SC()    
             else:
                 print(f"{nome_processo} Não está na seção crítica.")
-
-            print(f"{nome_processo} está saindo da seção crítica.")
             #organizar para pegar o próximo da fila
 
         if opcao == '3':
