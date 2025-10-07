@@ -100,41 +100,13 @@ class Peer(object):
             with peers_lock:
                 for peer in LIST_PEERS:
                     if peer != nome_processo:
-                        print(f"  - {peer}")
-
-        # max_tempo_espera = time.time() + TIME_WAIT_SC
-        # while True:
-        #     if count_replies == len(LIST_PEERS) - 1:
-        #         print(f"{nome_processo} recebeu permissão de todos os peers.")
-        #         self.enter_SC()
-        #         break
-        #     if time.time() > max_tempo_espera:
-        #         #fazer a desativacao
-        #         print(f"If state do outro peer for Held n desativa, se for released desativa")
-
-        #         break
-        #     time.sleep(0.1) 
-        
+                        print(f"{peer}")
 
     def enter_SC(self):
             global state
             if(state != State.HELD and count_replies == len(LIST_PEERS) - 1):
                 state = State.HELD
                 print(f"{nome_processo} entrou na seção crítica.")
-                #########################################################################
-                # Não pode ser time sleep se não eu n vou conseguir liberar a SC manualmente
-                #time.sleep(TIME_HELD_SC)  # Tempo dentro da SC
-                
-                # #Colocar uns locks
-                # inicio_held = time.time()
-                # # Fazer isso virar thread para n travar o programa
-                # while(State.HELD == state):            
-                #     if(time.time() > inicio_held + TIME_HELD_SC):
-                #         print(f"{nome_processo} atingiu o tempo máximo na seção crítica.")
-                #         self.exit_SC()
-                #         break
-                #     time.sleep(0.1)
-
                 thread = threading.Thread(target=self.controle_tempo, daemon=True)
                 thread.start()
 
@@ -160,9 +132,20 @@ class Peer(object):
         if not fila_request:
             print("Nenhum processo aguardando a SC.")
         else:
-            print(f"Processos aguardando na fila: {[req[1] for req in fila_request]}")              
+            print(f"Processos aguardando na fila: {[req[1] for req in fila_request]}")             
+
         # Processa fila
-        for ts, requester in fila_request:
+        # Se tiver algo na fila pega apenas o primeiro
+        if fila_request:
+            requester = fila_request.pop(0)
+            try:
+                proxy = Pyro5.api.Proxy("PYRONAME:" + requester)
+                proxy.reply_granted(nome_processo)
+            except:
+                print(f"Erro para enviar o pedido da fila para o {requester}")
+
+
+        for requester in fila_request:
             try:
                 proxy = Pyro5.api.Proxy("PYRONAME:" + requester)
                 proxy.reply_granted(nome_processo)
