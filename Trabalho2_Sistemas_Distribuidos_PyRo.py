@@ -65,7 +65,17 @@ class Peer(object):
         requesttimestamp = timestamp
         #segundos desde 1 de janeiro de 1970
         print(f"{nome_processo} está em estado WANTED e solicita permissão para entrar na SC. ts={timestamp}")
-        
+
+        all_replies = threading.Event()        
+
+        def waitforreplies():
+            while count_replies < len(LIST_PEERS) - 1:
+                time.sleep(0.1)
+            all_replies.set()
+
+        t = threading.Thread(target = waitforreplies, daemon=True)
+        t.start()
+    
         for peer in LIST_PEERS:
             if peer != nome_processo:
                 try:
@@ -74,19 +84,36 @@ class Peer(object):
                     proxy.request_entry(timestamp, nome_processo)
                 except Exception as e:
                     print(f"Falha ao enviar request_entry para {peer}: {e}")
+                    #desativa o safado
+                    with peers_lock:
+                        if peer in LIST_PEERS:
+                            LIST_PEERS.remove(peer)
+                            print(f"Peer {peer} foi removido da lista devido a falha na comunicação.")
 
-        max_tempo_espera = time.time() + TIME_WAIT_SC
-        while True:
-            if count_replies == len(LIST_PEERS) - 1:
-                print(f"{nome_processo} recebeu permissão de todos os peers.")
-                self.enter_SC()
-                break
-            if time.time() > max_tempo_espera:
-                #fazer a desativacao
-                print(f"If state do outro peer for Held n desativa, se for released desativa")
+        # Espera as respostas ou timeout
+        # TRUE se recebeu todas as permissões, FALSE se deu b.o
+        if all_replies.wait(timeout=TIME_WAIT_SC):
+            print(f"{nome_processo} recebeu permissão de todos os peers.")
+            self.enter_SC()
+        else:
+            print(f"{nome_processo} não recebeu todas as permissões a tempo. Peers possivelmente inativos:")
+            with peers_lock:
+                for peer in LIST_PEERS:
+                    if peer != nome_processo:
+                        print(f"  - {peer}")
 
-                break
-            time.sleep(0.1) 
+        # max_tempo_espera = time.time() + TIME_WAIT_SC
+        # while True:
+        #     if count_replies == len(LIST_PEERS) - 1:
+        #         print(f"{nome_processo} recebeu permissão de todos os peers.")
+        #         self.enter_SC()
+        #         break
+        #     if time.time() > max_tempo_espera:
+        #         #fazer a desativacao
+        #         print(f"If state do outro peer for Held n desativa, se for released desativa")
+
+        #         break
+        #     time.sleep(0.1) 
         
 
     def enter_SC(self):
@@ -235,8 +262,8 @@ if __name__ == "__main__":
     iniciar_thread_processo(nome_processo)
     time.sleep(10)
 
-    #iniciar_heartbeats()
-    #iniciar_monitorar_peers()
+    iniciar_heartbeats()
+    iniciar_monitorar_peers()
 
 
     while True:
