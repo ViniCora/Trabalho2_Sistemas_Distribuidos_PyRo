@@ -51,7 +51,6 @@ class Peer(object):
             print(f"{nome_processo} - Responde a {nome}.")
             proxy.reply_granted()
 
-
     @Pyro5.api.oneway
     def reply_granted(self):
         global count_replies
@@ -99,18 +98,35 @@ class Peer(object):
                 # Não pode ser time sleep se não eu n vou conseguir liberar a SC manualmente
                 #time.sleep(TIME_HELD_SC)  # Tempo dentro da SC
                 
-                #Colocar uns locks
-                inicio_held = time.time()
-                # Fazer isso virar thread para n travar o programa
-                while(State.HELD == state):            
-                    if(time.time() > inicio_held + TIME_HELD_SC):
-                        print(f"{nome_processo} atingiu o tempo máximo na seção crítica.")
-                        self.exit_SC()
-                        break
-                    time.sleep(0.1)
+                # #Colocar uns locks
+                # inicio_held = time.time()
+                # # Fazer isso virar thread para n travar o programa
+                # while(State.HELD == state):            
+                #     if(time.time() > inicio_held + TIME_HELD_SC):
+                #         print(f"{nome_processo} atingiu o tempo máximo na seção crítica.")
+                #         self.exit_SC()
+                #         break
+                #     time.sleep(0.1)
+
+                thread = threading.Thread(target=self.controle_tempo, daemon=True)
+                thread.start()
+
+    def controle_tempo(self):
+        inicio_held = time.time()
+        while state == State.HELD:
+            if(time.time() > inicio_held + TIME_HELD_SC):
+                print(f"{nome_processo} atingiu o tempo máximo na seção crítica.")
+                self.exit_SC()
+                break
+            time.sleep(0.1)
 
     def exit_SC(self):
         global state, fila_request
+
+        if state != State.HELD:
+            print(f"{nome_processo} saiu da SC.")
+            return
+        
         state = State.RELEASED
         print(f"{nome_processo} saiu da SC")
 
