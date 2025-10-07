@@ -26,6 +26,7 @@ ultima_vez_heartbeat = {}
 peers_lock = threading.Lock()
 fila_request = []
 count_replies = 0
+requesttimestamp = 0
 
 @Pyro5.api.expose
 class Peer(object):
@@ -37,21 +38,18 @@ class Peer(object):
     @Pyro5.api.oneway
     def request_entry(self,timestamp, nome):
         print(f'Recebeu o pedido de entrada do [{nome}]')
-        global state, fila_request
+        global state, fila_request, requesttimestamp
 
-        # Cada peer verifica se está segurando
-        if state == State.HELD:
-            print(f"O {nome_processo} está em estado HELD e não pode responder a {nome} > Adicionado na Fila.")
+        # Cada peer verifica se está segurando e quem tem a prioridade no pedido
+        # nome_processo < nome: lexicograficamente
+        if (state == State.HELD or (state == State.WANTED and ((requesttimestamp < timestamp) or (requesttimestamp == timestamp and nome_processo < nome)))):
+            print(f"O {nome_processo} está em estado HELD ou tem prioridade > [{nome}] Adicionado na Fila.")
             fila_request.append((timestamp, nome))
-        elif state == State.RELEASED:
+        else:
+            # Não precisa validar released, só responde - pq pode cair no caso onde os 2 pedem ao mesmo tempo
             proxy = Pyro5.api.Proxy("PYRONAME:" + nome) 
-            print(f"{nome_processo} está em estado RELEASED e responde a {nome}.")
+            print(f"{nome_processo} - Responde a {nome}.")
             proxy.reply_granted()
-        elif state == State.WANTED:
-            print('Pending')
-            # Comparar timestamps
-            # Se o outro for mais antigo permite
-            # Se o o outro for mais recente coloca na fila
 
 
     @Pyro5.api.oneway
@@ -60,12 +58,13 @@ class Peer(object):
         count_replies += 1
         print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies} de {len(LIST_PEERS) - 1}")
 
-    def request_SC(self):
-        global state, count_replies
+    def request_SC(self, timestamp):
+        global state, count_replies, requesttimestamp
         state = State.WANTED
         count_replies = 0
-        #segudos desde 1 de janeiro de 1970
-        timestamp = time.time()
+        # Salva seu próprio timestamp para poder comparar com o outro no request entry 
+        requesttimestamp = timestamp
+        #segundos desde 1 de janeiro de 1970
         print(f"{nome_processo} está em estado WANTED e solicita permissão para entrar na SC. ts={timestamp}")
         
         for peer in LIST_PEERS:
@@ -85,7 +84,8 @@ class Peer(object):
                 break
             if time.time() > max_tempo_espera:
                 #fazer a desativacao
-                print(f"EXCEDEU - verificar os peers ativos e quem não respondeu - desativar ele")
+                print(f"If state do outro peer for Held n desativa, se for released desativa")
+
                 break
             time.sleep(0.1) 
         
@@ -101,6 +101,7 @@ class Peer(object):
                 
                 #Colocar uns locks
                 inicio_held = time.time()
+                # Fazer isso virar thread para n travar o programa
                 while(State.HELD == state):            
                     if(time.time() > inicio_held + TIME_HELD_SC):
                         print(f"{nome_processo} atingiu o tempo máximo na seção crítica.")
@@ -208,6 +209,7 @@ def iniciar_monitorar_peers():
 
 
 if __name__ == "__main__":
+    
     # Configuração do argparse para receber o nome do processo
     parser = argparse.ArgumentParser()
     parser.add_argument("--nome", required=True, help="Nome do processo (peer)")
@@ -230,6 +232,8 @@ if __name__ == "__main__":
         proxy = Pyro5.api.Proxy("PYRONAME:" + nome_processo)
 
         if opcao == '1':
+            
+            requesttimestamp = time.time()
             timeS = time.time()
             proxy.request_SC(timeS)
 
