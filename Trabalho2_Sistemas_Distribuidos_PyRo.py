@@ -18,8 +18,8 @@ class State(Enum):
 nome_processo = ''
 #On initialization state := RELEASED;
 state = State.RELEASED
-HEART_BEAT_TIME = 10
-TIME_HELD_SC = 8
+HEART_BEAT_TIME = 15
+TIME_HELD_SC = 30
 TIME_WAIT_SC = 5
 LIST_PEERS = ['peerA', 'peerB', 'peerC']
 ultima_vez_heartbeat = {}
@@ -35,7 +35,7 @@ class Peer(object):
         agora = time.time()
         ultima_vez_heartbeat[name] = agora
 
-    @Pyro5.api.oneway
+    @Pyro5.api.callback
     def request_entry(self,timestamp, nome):
         print(f'Recebeu o pedido de entrada do [{nome}]')
         global state, fila_request, requesttimestamp
@@ -45,11 +45,13 @@ class Peer(object):
         if (state == State.HELD or (state == State.WANTED and ((requesttimestamp < timestamp) or (requesttimestamp == timestamp and nome_processo < nome)))):
             print(f"O {nome_processo} está em estado HELD ou tem prioridade > [{nome}] Adicionado na Fila.")
             fila_request.append((timestamp, nome))
+            return 'HELD'
         else:
             # Não precisa validar released, só responde - pq pode cair no caso onde os 2 pedem ao mesmo tempo
             proxy = Pyro5.api.Proxy("PYRONAME:" + nome) 
             print(f"{nome_processo} - Responde a {nome}.")
             proxy.reply_granted()
+            return 'GRANTED'
 
     @Pyro5.api.oneway
     def reply_granted(self):
@@ -57,44 +59,54 @@ class Peer(object):
         count_replies += 1
         print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies} de {len(LIST_PEERS) - 1}")
 
-    def request_SC(self, timestamp):
-        global state, count_replies, requesttimestamp
-        state = State.WANTED
-        count_replies = 0
-        # Salva seu próprio timestamp para poder comparar com o outro no request entry 
-        requesttimestamp = timestamp
-        #segundos desde 1 de janeiro de 1970
-        print(f"{nome_processo} está em estado WANTED e solicita permissão para entrar na SC. ts={timestamp}")
+    @Pyro5.api.oneway
+    def liberar_sc(self):
+        global count_replies
+        count_replies += 1
+        #print("OIIIIIIIIIIII")
+        enter_SC()
 
-        all_replies = threading.Event()        
+def request_SC(timestamp):
+    global state, count_replies, requesttimestamp
+    state = State.WANTED
+    count_replies = 0
+    # Salva seu próprio timestamp para poder comparar com o outro no request entry
+    requesttimestamp = timestamp
+    print(f"{nome_processo} está em estado WANTED e solicita permissão para entrar na SC. ts={timestamp}")
 
-        def waitforreplies():
-            while count_replies < len(LIST_PEERS) - 1:
-                time.sleep(0.1)
-            all_replies.set()
+    all_replies = threading.Event()
 
-        t = threading.Thread(target = waitforreplies, daemon=True)
-        t.start()
-    
-        for peer in LIST_PEERS:
-            if peer != nome_processo:
-                try:
-                    # Pede para todos para entrar na SC
-                    proxy = Pyro5.api.Proxy("PYRONAME:" + peer) 
-                    proxy.request_entry(timestamp, nome_processo)
-                except Exception as e:
-                    print(f"Falha ao enviar request_entry para {peer}: {e}")
-                    #desativa o safado
-                    with peers_lock:
-                        if peer in LIST_PEERS:
-                            LIST_PEERS.remove(peer)
-                            print(f"Peer {peer} foi removido da lista devido a falha na comunicação.")
+    def waitforreplies():
+        while count_replies < len(LIST_PEERS) - 1:
+            time.sleep(0.1)
+        all_replies.set()
 
-        # Espera as respostas ou timeout
-        # TRUE se recebeu todas as permissões, FALSE se deu b.o
-        if all_replies.wait(timeout=TIME_WAIT_SC):
+    t = threading.Thread(target=waitforreplies, daemon=True)
+    t.start()
+    contador_respostas_granteds = 0
+    for peer in LIST_PEERS:
+        if peer != nome_processo:
+            try:
+                # Pede para todos para entrar na SC
+                proxy = Pyro5.api.Proxy("PYRONAME:" + peer)
+                resposta = proxy.request_entry(timestamp, nome_processo)
+                if resposta == 'GRANTED':
+                    print("Resposta= ", resposta)
+                    contador_respostas_granteds += 1
+            except Exception as e:
+                print(f"Falha ao enviar request_entry para {peer}: {e}")
+                #desativa o safado
+                with peers_lock:
+                    if peer in LIST_PEERS:
+                        LIST_PEERS.remove(peer)
+                        print(f"Peer {peer} foi removido da lista devido a falha na comunicação.")
+
+    # Espera as respostas ou timeout
+    # TRUE se recebeu todas as permissões, FALSE se deu b.o
+    if all_replies.wait(timeout=TIME_WAIT_SC):
+        if contador_respostas_granteds == (len(LIST_PEERS) - 1):
             print(f"{nome_processo} recebeu permissão de todos os peers.")
-            self.enter_SC()
+            enter_SC()
         else:
             print(f"{nome_processo} não recebeu todas as permissões a tempo. Peers possivelmente inativos:")
             with peers_lock:
@@ -102,57 +114,51 @@ class Peer(object):
                     if peer != nome_processo:
                         print(f"{peer}")
 
-    def enter_SC(self):
-            global state
-            if(state != State.HELD and count_replies == len(LIST_PEERS) - 1):
-                state = State.HELD
-                print(f"{nome_processo} entrou na seção crítica.")
-                thread = threading.Thread(target=self.controle_tempo, daemon=True)
-                thread.start()
+def enter_SC():
+        global state
+        if(state != State.HELD and count_replies == len(LIST_PEERS) - 1):
+            state = State.HELD
+            print(f"{nome_processo} entrou na seção crítica.")
+            thread = threading.Thread(target=controle_tempo, daemon=True)
+            thread.start()
 
-    def controle_tempo(self):
-        inicio_held = time.time()
-        while state == State.HELD:
-            if(time.time() > inicio_held + TIME_HELD_SC):
-                print(f"{nome_processo} atingiu o tempo máximo na seção crítica.")
-                self.exit_SC()
-                break
-            time.sleep(0.1)
+def controle_tempo():
+    inicio_held = time.time()
+    while state == State.HELD:
+        if(time.time() > inicio_held + TIME_HELD_SC):
+            print(f"{nome_processo} atingiu o tempo máximo na seção crítica.")
+            exit_SC()
+            break
+        time.sleep(0.1)
 
-    def exit_SC(self):
-        global state, fila_request
+def exit_SC():
+    global state, fila_request
 
-        if state != State.HELD:
-            print(f"{nome_processo} saiu da SC.")
-            return
-        
-        state = State.RELEASED
-        print(f"{nome_processo} saiu da SC")
+    if state != State.HELD:
+        print(f"{nome_processo} saiu da SC.")
+        return
 
-        if not fila_request:
-            print("Nenhum processo aguardando a SC.")
-        else:
-            print(f"Processos aguardando na fila: {[req[1] for req in fila_request]}")             
+    state = State.RELEASED
+    print(f"{nome_processo} saiu da SC")
 
-        # Processa fila
-        # Se tiver algo na fila pega apenas o primeiro
-        if fila_request:
-            requester = fila_request.pop(0)
-            try:
-                proxy = Pyro5.api.Proxy("PYRONAME:" + requester)
-                proxy.reply_granted(nome_processo)
-            except:
-                print(f"Erro para enviar o pedido da fila para o {requester}")
+    if not fila_request:
+        print("Nenhum processo aguardando a SC.")
+    else:
+        print(f"Processos aguardando na fila: {[req[1] for req in fila_request]}")
+
+    # Processa fila
+    # Se tiver algo na fila pega apenas o primeiro
+    if fila_request:
+        _, requester = fila_request.pop(0)
+        try:
+            peer = Pyro5.api.Proxy("PYRONAME:" + requester)
+            peer.liberar_sc()
+        except:
+            print(f"Erro para enviar o pedido da fila para o {requester}")
 
 
-        for requester in fila_request:
-            try:
-                proxy = Pyro5.api.Proxy("PYRONAME:" + requester)
-                proxy.reply_granted(nome_processo)
-            except:
-                print(f"Não foi possível enviar permissão para {requester}")
-        #Ajustar isso para não esvaziar a fila mas ir para o próximo
-        fila_request.clear()
+    #Ajustar isso para não esvaziar a fila mas ir para o próximo
+    #fila_request.clear()
 
 
 def start_nameserver():
@@ -224,7 +230,7 @@ def monitorar_peers():
             if ultima_vez_heartbeat:
                 for peer in LIST_PEERS[:]:
                     ultimo = ultima_vez_heartbeat.get(peer, None)
-                    if ultimo is not None and agora - ultimo > HEART_BEAT_TIME:
+                    if ultimo is not None and agora - ultimo > (HEART_BEAT_TIME + 0.2):
                         print(f"Peer {peer} não enviou heartbeat a mais de {HEART_BEAT_TIME}s, removendo da lista")
                         LIST_PEERS.remove(peer)
         time.sleep(0.5)
@@ -235,7 +241,6 @@ def iniciar_monitorar_peers():
 
 
 if __name__ == "__main__":
-    
     # Configuração do argparse para receber o nome do processo
     parser = argparse.ArgumentParser()
     parser.add_argument("--nome", required=True, help="Nome do processo (peer)")
@@ -253,6 +258,7 @@ if __name__ == "__main__":
         print("1 - Requisitar recursos")
         print("2 - Liberar recursos")
         print("3 - Listar peers ativos")
+        print("4 - Status atual")
         opcao = input("Selecione uma das opções: ")
 
         proxy = Pyro5.api.Proxy("PYRONAME:" + nome_processo)
@@ -261,12 +267,12 @@ if __name__ == "__main__":
             
             requesttimestamp = time.time()
             timeS = time.time()
-            proxy.request_SC(timeS)
+            request_SC(timeS)
 
         elif opcao == '2':
             if state == State.HELD:
                 print(f"{nome_processo} Liberando recursos manualmente")
-                proxy.exit_SC()    
+                exit_SC()
             else:
                 print(f"{nome_processo} Não está na seção crítica.")
             #organizar para pegar o próximo da fila
@@ -279,4 +285,9 @@ if __name__ == "__main__":
             for nome, uri in objetos.items():
                 if nome != "Pyro.NameServer":
                     print(f"Peer ativo: {nome}")
+            print("")
+
+        if opcao == '4':
+            print("")
+            print("Status: ", state)
             print("")
