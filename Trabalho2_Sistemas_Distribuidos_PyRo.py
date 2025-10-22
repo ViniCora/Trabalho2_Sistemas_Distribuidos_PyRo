@@ -21,7 +21,7 @@ state = State.RELEASED
 HEART_BEAT_TIME = 15
 TIME_HELD_SC = 30
 TIME_WAIT_SC = 5
-LIST_PEERS = ['peerA', 'peerB', 'peerC']
+LIST_PEERS = ['peerA', 'peerB', 'peerC', 'peerD']
 ultima_vez_heartbeat = {}
 peers_lock = threading.Lock()
 fila_request = []
@@ -42,9 +42,10 @@ class Peer(object):
 
         # Cada peer verifica se está segurando e quem tem a prioridade no pedido
         # nome_processo < nome: lexicograficamente
-        if (state == State.HELD or (state == State.WANTED and ((requesttimestamp < timestamp) or (requesttimestamp == timestamp and nome_processo < nome)))):
+        if state == State.HELD or (state == State.WANTED and requesttimestamp < timestamp):
             print(f"O {nome_processo} está em estado HELD ou tem prioridade > [{nome}] Adicionado na Fila.")
             fila_request.append((timestamp, nome))
+            print(fila_request)
             return 'HELD'
         else:
             # Não precisa validar released, só responde - pq pode cair no caso onde os 2 pedem ao mesmo tempo
@@ -60,14 +61,14 @@ class Peer(object):
         print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies} de {len(LIST_PEERS) - 1}")
 
     @Pyro5.api.oneway
-    def liberar_sc(self):
+    def somar_resposta_e_tenta_entrar_sc(self):
         global count_replies
         count_replies += 1
-        #print("OIIIIIIIIIIII")
+        print(f"{nome_processo} recebeu uma permissão. Total de permissões: {count_replies} de {len(LIST_PEERS) - 1}")
         enter_SC()
 
 def request_SC(timestamp):
-    global state, count_replies, requesttimestamp
+    global state, count_replies, requesttimestamp, fila_request
     state = State.WANTED
     count_replies = 0
     # Salva seu próprio timestamp para poder comparar com o outro no request entry
@@ -91,7 +92,7 @@ def request_SC(timestamp):
                 proxy = Pyro5.api.Proxy("PYRONAME:" + peer)
                 resposta = proxy.request_entry(timestamp, nome_processo)
                 if resposta == 'GRANTED':
-                    print("Resposta= ", resposta)
+                    #print("Resposta= ", resposta)
                     contador_respostas_granteds += 1
             except Exception as e:
                 print(f"Falha ao enviar request_entry para {peer}: {e}")
@@ -99,6 +100,10 @@ def request_SC(timestamp):
                 with peers_lock:
                     if peer in LIST_PEERS:
                         LIST_PEERS.remove(peer)
+                        for item in fila_request:
+                            if item[1] == peer:
+                                fila_request.remove(peer)
+                                print("Removendo 2")
                         print(f"Peer {peer} foi removido da lista devido a falha na comunicação.")
 
     # Espera as respostas ou timeout
@@ -115,8 +120,10 @@ def request_SC(timestamp):
                         print(f"{peer}")
 
 def enter_SC():
-        global state
-        if(state != State.HELD and count_replies == len(LIST_PEERS) - 1):
+        global state, fila_request
+        print(f"count replies: {0}", count_replies)
+        print(f"len peer: {0}", len(LIST_PEERS) - 1)
+        if(state != State.HELD and count_replies >= len(LIST_PEERS) - 1):
             state = State.HELD
             print(f"{nome_processo} entrou na seção crítica.")
             thread = threading.Thread(target=controle_tempo, daemon=True)
@@ -132,7 +139,7 @@ def controle_tempo():
         time.sleep(0.1)
 
 def exit_SC():
-    global state, fila_request
+    global state, fila_request, count_replies
 
     if state != State.HELD:
         print(f"{nome_processo} saiu da SC.")
@@ -140,25 +147,22 @@ def exit_SC():
 
     state = State.RELEASED
     print(f"{nome_processo} saiu da SC")
-
     if not fila_request:
         print("Nenhum processo aguardando a SC.")
     else:
         print(f"Processos aguardando na fila: {[req[1] for req in fila_request]}")
 
-    # Processa fila
-    # Se tiver algo na fila pega apenas o primeiro
+    peer = ''
     if fila_request:
-        _, requester = fila_request.pop(0)
         try:
-            peer = Pyro5.api.Proxy("PYRONAME:" + requester)
-            peer.liberar_sc()
+            for item in fila_request:
+                peer = Pyro5.api.Proxy("PYRONAME:" + item[1])
+                peer.somar_resposta_e_tenta_entrar_sc()
+                print(item)
+            fila_request = []
         except:
-            print(f"Erro para enviar o pedido da fila para o {requester}")
-
-
-    #Ajustar isso para não esvaziar a fila mas ir para o próximo
-    #fila_request.clear()
+            print(f"Erro para enviar o pedido da fila para o {peer}")
+    count_replies = 0
 
 
 def start_nameserver():
@@ -223,7 +227,7 @@ def iniciar_heartbeats():
 
 
 def monitorar_peers():
-    global LIST_PEERS
+    global LIST_PEERS, fila_request
     while True:
         agora = time.time()
         with peers_lock:
@@ -233,6 +237,11 @@ def monitorar_peers():
                     if ultimo is not None and agora - ultimo > (HEART_BEAT_TIME + 0.2):
                         print(f"Peer {peer} não enviou heartbeat a mais de {HEART_BEAT_TIME}s, removendo da lista")
                         LIST_PEERS.remove(peer)
+                        print("fila: ", fila_request)
+                        for item in fila_request:
+                            if item[1] == peer:
+                                fila_request.remove(item)
+                                print("Removendo 1")
         time.sleep(0.5)
 
 def iniciar_monitorar_peers():
@@ -252,7 +261,6 @@ if __name__ == "__main__":
 
     iniciar_heartbeats()
     iniciar_monitorar_peers()
-
 
     while True:
         print("1 - Requisitar recursos")
@@ -280,11 +288,11 @@ if __name__ == "__main__":
         if opcao == '3':
             ns = Pyro5.api.locate_ns()
             objetos = ns.list()
+            #print("") pois não tenho barra invertida no teclado
             print("")
             print("Lista de peers ativos: ")
-            for nome, uri in objetos.items():
-                if nome != "Pyro.NameServer":
-                    print(f"Peer ativo: {nome}")
+            for peer in LIST_PEERS:
+                print(f"Peer ativo: {peer}")
             print("")
 
         if opcao == '4':
